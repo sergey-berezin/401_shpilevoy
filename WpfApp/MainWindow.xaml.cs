@@ -120,14 +120,14 @@ namespace WpfApp
 
         private async void CalculateClick(object sender, RoutedEventArgs e)
         {
-			ResetToken();
-            ViewData.Distance = 0;
-            ViewData.Similarity = 0;
-
-			pbStatus.Value = 0;
-
             if (ViewData.CalculationEnable && AllParameteresValid)
             {
+				ResetToken();
+				ViewData.Distance = 0;
+				ViewData.Similarity = 0;
+
+				pbStatus.Value = 0;
+
                 ViewData.CalculationEnable = false;
                 ViewData.Cancellable = true;
 
