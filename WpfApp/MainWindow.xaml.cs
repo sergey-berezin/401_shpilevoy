@@ -8,9 +8,9 @@ using System.Windows;
 using System.Windows.Data;
 using System.Windows.Controls;
 using Ookii.Dialogs.Wpf;
-
-
-
+using System.Linq;
+using Microsoft.EntityFrameworkCore;
+using SixLabors.ImageSharp.PixelFormats;
 namespace WpfApp
 {
 	public partial class MainWindow : Window
@@ -117,6 +117,70 @@ namespace WpfApp
             token = token_src.Token;
         }
 
+		private ImageInfo[] GetImagesFromDb(List<byte[]> imagesBytes)
+		{
+            //получаем хеши
+            var hashes = new string[imagesBytes.Count];
+            for (int i = 0; i < hashes.Length; i++)
+                hashes[i] = ImageDetails.GetHash(imagesBytes[i]);
+
+            //ищем в базе по хешу
+            var imagesFromDb = new ImageInfo[hashes.Length];
+            using (var db = new ImagesContext())
+            {
+                for (int i = 0; i < hashes.Length; i++)
+                {
+                    var q = db.ImagesInfo
+                    .Where(x => x.Hash == hashes[i])
+                    .Include(x => x.Details)
+                    .Where(x => Equals(x.Details.Data, imagesBytes[i]));
+
+                    if (q.Any())
+                    {
+                        //MessageBox.Show("image from db");
+                        imagesFromDb[i] = q.First();
+                    }
+                }
+            }
+			return imagesFromDb;
+        }
+
+		private void LaunchTasks(
+            ref float[][] imgEmbeddings,
+            ref List<Task<Task<(float[], int)>>> tasks,
+            List<byte[]> imagesBytes)
+		{
+			//ищем картинки в базе
+            var imagesFromDb = GetImagesFromDb(imagesBytes); 
+
+            for (int i = 0; i < imagesBytes.Count; i++)
+            {
+                if (imagesFromDb[i] != null) //изображение было в базе
+                {
+                    imgEmbeddings[i] = new float[imagesFromDb[i].Embedding.Length / 4];
+                    Buffer.BlockCopy(imagesFromDb[i].Embedding, 0, imgEmbeddings[i], 0, imagesFromDb[i].Embedding.Length);
+                }
+                else
+                {
+                    //получаем тензор
+                    var image_tensor = ArcFaceComponent.Component.GetTensorFromImage(
+                        SixLabors.ImageSharp.Image.Load<Rgb24>(imagesBytes[i])
+                    );
+
+                    //запускаем асинхронные таски
+                    var idx = i;
+                    var img_embd = Task.Factory.StartNew(async () =>
+                    {
+                        var emb = await ArcFaceModel.GetEmbeddings(image_tensor, token);
+                        return (emb, idx);
+                    });
+
+                    //складываем в список для отслеживания завершения
+                    tasks.Add(img_embd);
+                }
+                
+            }
+        }
 
         private async void CalculateClick(object sender, RoutedEventArgs e)
         {
@@ -131,20 +195,28 @@ namespace WpfApp
                 ViewData.CalculationEnable = false;
                 ViewData.Cancellable = true;
 
-                var image_tensor1 = ArcFaceComponent.Component.GetTensorFromImage(ViewData.ImagePath1);
-                var image_tensor2 = ArcFaceComponent.Component.GetTensorFromImage(ViewData.ImagePath2);
+                bool sameImages = ViewData.ImagePath1 == ViewData.ImagePath2;
 
-				//запускаем асинхронные таски
-				var img1_embd = ArcFaceModel.GetEmbeddings(image_tensor1, token);
-                var img2_embd = ArcFaceModel.GetEmbeddings(image_tensor2, token);
+                //загружаем выбранные картинки
+                var imagesBytes = new List<byte[]>{
+                    File.ReadAllBytes(ViewData.ImagePath1),
+                };
+                if (!sameImages) imagesBytes.Add(File.ReadAllBytes(ViewData.ImagePath2));
 
-				//складываем в список для отслеживания завершения
-                var tasks = new List<Task> { img1_embd, img2_embd };
+                var imgEmbeddings = new float[imagesBytes.Count][];
+				var tasks = new List<Task<Task<(float[], int)>>>();
+
+                //получаем данные из базы + запускаем таски если не нашли данные
+				LaunchTasks(ref imgEmbeddings, ref tasks, imagesBytes);
+                
 				while (tasks.Count > 0)
 				{
 					//если вернулся - либо закончил - либо отменился
                     var finished = await Task.WhenAny(tasks);
-					if (token.IsCancellationRequested)
+					var calcResult = await await finished;
+					var imageIdx = calcResult.Item2;
+
+                    if (token.IsCancellationRequested)
 					{
 						tasks.Clear();
                         pbStatus.Value = 0;
@@ -153,22 +225,40 @@ namespace WpfApp
 						MessageBox.Show("All calculations canceled");
 						break;
 					}
-					else
+					else 
 					{
-						pbStatus.Value += 50;
+						imgEmbeddings[imageIdx] = calcResult.Item1;
+
+                        //записываем результат в базу
+                        using (var db = new ImagesContext())           
+                        {
+                            var byteArray = new byte[calcResult.Item1.Length * 4];
+                            Buffer.BlockCopy(imgEmbeddings[imageIdx], 0, byteArray, 0, byteArray.Length);
+
+                            var newImageDetails = new ImageDetails { Data = imagesBytes[imageIdx] };
+							ImageInfo newImage = new ImageInfo
+							{
+								Name = (imageIdx == 0) ? Path.GetFileName(ViewData.ImagePath1) : Path.GetFileName(ViewData.ImagePath2),
+                                Embedding = byteArray,
+                                Details = newImageDetails,
+                                Hash = ImageDetails.GetHash(newImageDetails.Data),
+                            };
+                            db.Add(newImage);
+                            db.SaveChanges();
+                        }
+                        pbStatus.Value += 49;
 					}
                     tasks.Remove(finished);
                 }
 
-				//посчитать метрики
-				await Task.Factory.StartNew(async () =>
+                //посчитать метрики
+                await Task.Factory.StartNew(() =>
 				{
-					var emb1 = await img1_embd; //сразу вернется
-					var emb2 = await img2_embd; //сразу вернется
-					ViewData.Distance = ArcFaceModel.Distance(emb1, emb2);
-					ViewData.Similarity = ArcFaceModel.Similarity(emb1, emb2);
+                    ViewData.Distance = ArcFaceModel.Distance(imgEmbeddings[0], sameImages ? imgEmbeddings[0] : imgEmbeddings[1]);
+                    ViewData.Similarity = ArcFaceModel.Similarity(imgEmbeddings[0], sameImages ? imgEmbeddings[0] : imgEmbeddings[1]);
 				});
 
+                pbStatus.Value = 100;
                 ViewData.Cancellable = false; 
             }
         }
@@ -176,6 +266,12 @@ namespace WpfApp
         private void CancelCalculationsClick(object sender, RoutedEventArgs e)
         {
 			token_src.Cancel();
+        }
+
+        private void OpenDatabaseClick(object sender, RoutedEventArgs e)
+        {
+            DatabaseWindow windowDatabase = new DatabaseWindow();
+            windowDatabase.Show();
         }
     }
 

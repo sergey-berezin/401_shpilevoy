@@ -12,9 +12,8 @@ public static class ImageTransformer
     private static readonly int TargetWidth = 112;
     private static readonly int TargetHeight = 112;
 
-    static public DenseTensor<float> ImageToTensor(string img_path)
+    static public DenseTensor<float> ImageToTensor(Image<Rgb24> img)
     {
-        var img = Image.Load<Rgb24>(img_path);
         img.Mutate(x =>
         {
             x.Resize(new ResizeOptions
