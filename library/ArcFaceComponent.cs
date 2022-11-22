@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace ArcFaceComponent;
 
@@ -38,6 +39,8 @@ public class Component : IDisposable
 
     public float Similarity(float[] v1, float[] v2) => v1.Zip(v2).Select(p => p.First * p.Second).Sum();
 
+    public static DenseTensor<float> GetTensorFromImage(string img_path) => ImageTransformer.ImageToTensor(img_path);
+
     //utils
     float Length(float[] v) => (float)Math.Sqrt(v.Select(x => x * x).Sum());
 
@@ -47,17 +50,15 @@ public class Component : IDisposable
         return v.Select(x => x / len).ToArray();
     }
 
-    public async Task<float[]> GetEmbeddings(string image_path, CancellationToken token)
+
+    public async Task<float[]> GetEmbeddings(DenseTensor<float> image, CancellationToken token)
     {
         return await Task<float[]>.Factory.StartNew(() =>
         {
             if (token.IsCancellationRequested)
                 token.ThrowIfCancellationRequested();
 
-
-            Console.WriteLine($"calculation embedings for {image_path}");
-            var image_tensor = ImageTransformer.ImageToTensor(image_path);
-            var inputs = new List<NamedOnnxValue> { NamedOnnxValue.CreateFromTensor("data", image_tensor) };
+            var inputs = new List<NamedOnnxValue> { NamedOnnxValue.CreateFromTensor("data", image) };
 
             if (token.IsCancellationRequested)
                 token.ThrowIfCancellationRequested();
@@ -66,10 +67,10 @@ public class Component : IDisposable
             //IDisposableReadOnlyCollection<DisposableNamedOnnxValue>? results = null;
             lock (session)
             {
-                Console.WriteLine($"{image_path} take model");
+                Console.WriteLine($"{image} take model");
                 using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> outputs = session.Run(inputs);
 
-                Console.WriteLine($"{image_path} release model");
+                Console.WriteLine($"{image} release model");
                 return Normalize(outputs.First(v => v.Name == "fc1").AsEnumerable<float>().ToArray());
             }
 

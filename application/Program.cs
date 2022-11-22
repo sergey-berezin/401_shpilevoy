@@ -11,9 +11,11 @@ try
             .Range(0, 5)
             .Select(async i =>
             {
+                var tensor_img1 = Component.GetTensorFromImage("./face1.png");
+                var img1 = await solution.GetEmbeddings(tensor_img1, token);
 
-                var img1 = await solution.GetEmbeddings("./face1.png", token);
-                var img2 = await solution.GetEmbeddings("./face2.png", token);
+                var tensor_img2 = Component.GetTensorFromImage("./face2.png");
+                var img2 = await solution.GetEmbeddings(tensor_img2, token);
                 return $"distance = {solution.Distance(img1, img2)}\nsimilarity = {solution.Similarity(img1, img2)}";
             })
             .ToArray();
