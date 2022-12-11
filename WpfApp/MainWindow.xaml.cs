@@ -93,152 +93,155 @@ namespace WpfApp
 
 		private bool AllParameteresValid
 		{
-            get {
-                if (ViewData.FilesList1.Count == 0 || ViewData.FilesList2.Count == 0)
-                {
-                    MessageBox.Show("Select folder with images", "Images folder not detected", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return false;
-                }
-                else if (ViewData.ImagePath1 == "" || ViewData.ImagePath2 == "")
-                {
-                    MessageBox.Show("You need select one image from every list", "Images not selected", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return false;
-                }
+			get {
+				if (ViewData.FilesList1.Count == 0 || ViewData.FilesList2.Count == 0)
+				{
+					MessageBox.Show("Select folder with images", "Images folder not detected", MessageBoxButton.OK, MessageBoxImage.Error);
+					return false;
+				}
+				else if (ViewData.ImagePath1 == "" || ViewData.ImagePath2 == "")
+				{
+					MessageBox.Show("You need select one image from every list", "Images not selected", MessageBoxButton.OK, MessageBoxImage.Error);
+					return false;
+				}
 
-                return true;
-            }
+				return true;
+			}
 	
 		}
 
 
 		private void ResetToken()
 		{
-            token_src = new CancellationTokenSource();
-            token = token_src.Token;
-        }
+			token_src = new CancellationTokenSource();
+			token = token_src.Token;
+		}
 
 		private ImageInfo[] GetImagesFromDb(List<byte[]> imagesBytes)
 		{
-            //получаем хеши
-            var hashes = new string[imagesBytes.Count];
-            for (int i = 0; i < hashes.Length; i++)
-                hashes[i] = ImageDetails.GetHash(imagesBytes[i]);
+			//получаем хеши
+			var hashes = new string[imagesBytes.Count];
+			for (int i = 0; i < hashes.Length; i++)
+				hashes[i] = ImageDetails.GetHash(imagesBytes[i]);
 
-            //ищем в базе по хешу
-            var imagesFromDb = new ImageInfo[hashes.Length];
-            using (var db = new ImagesContext())
-            {
-                for (int i = 0; i < hashes.Length; i++)
-                {
-                    var q = db.ImagesInfo
-                    .Where(x => x.Hash == hashes[i])
-                    .Include(x => x.Details)
-                    .Where(x => Equals(x.Details.Data, imagesBytes[i]));
+			//ищем в базе по хешу
+			var imagesFromDb = new ImageInfo[hashes.Length];
+			using (var db = new ImagesContext())
+			{
+				for (int i = 0; i < hashes.Length; i++)
+				{
+					var q = db.ImagesInfo
+					.Where(x => x.Hash == hashes[i])
+					.Include(x => x.Details)
+					.Where(x => Equals(x.Details.Data, imagesBytes[i]));
 
+                    
                     if (q.Any())
-                    {
-                        //MessageBox.Show("image from db");
-                        imagesFromDb[i] = q.First();
-                    }
-                }
-            }
+					{
+						//MessageBox.Show("image from db" + i);
+						imagesFromDb[i] = q.First();
+					}
+				}
+			}
 			return imagesFromDb;
-        }
+		}
 
-		private void LaunchTasks(
-            ref float[][] imgEmbeddings,
-            ref List<Task<Task<(float[], int)>>> tasks,
-            List<byte[]> imagesBytes)
+		//true если из базы, false если нет
+		private (Task<float[]>[], bool[]) LaunchTasks(List<byte[]> imagesBytes)
 		{
 			//ищем картинки в базе
-            var imagesFromDb = GetImagesFromDb(imagesBytes); 
+			var imagesFromDb = GetImagesFromDb(imagesBytes);
+			var imageFromDbBoolAr = imagesFromDb.Select(x => x != null).ToArray();
 
-            for (int i = 0; i < imagesBytes.Count; i++)
+			var tasks = imagesFromDb.Zip(imagesBytes, (imageInfo, imageBytes) =>
             {
-                if (imagesFromDb[i] != null) //изображение было в базе
+                if (imageInfo != null) //изображение было в базе
                 {
-                    imgEmbeddings[i] = new float[imagesFromDb[i].Embedding.Length / 4];
-                    Buffer.BlockCopy(imagesFromDb[i].Embedding, 0, imgEmbeddings[i], 0, imagesFromDb[i].Embedding.Length);
+                    var imgEmbeddings = new float[imageInfo.Embedding.Length / 4];
+                    Buffer.BlockCopy(imageInfo.Embedding, 0, imgEmbeddings, 0, imageInfo.Embedding.Length);
+                    return Task<float[]>.FromResult(imgEmbeddings);
                 }
                 else
                 {
                     //получаем тензор
                     var image_tensor = ArcFaceComponent.Component.GetTensorFromImage(
-                        SixLabors.ImageSharp.Image.Load<Rgb24>(imagesBytes[i])
+                        SixLabors.ImageSharp.Image.Load<Rgb24>(imageBytes)
                     );
 
                     //запускаем асинхронные таски
-                    var idx = i;
-                    var img_embd = Task.Factory.StartNew(async () =>
-                    {
-                        var emb = await ArcFaceModel.GetEmbeddings(image_tensor, token);
-                        return (emb, idx);
-                    });
-
-                    //складываем в список для отслеживания завершения
-                    tasks.Add(img_embd);
+                    return ArcFaceModel.GetEmbeddings(image_tensor, token);
                 }
-                
             }
+            ).ToArray();
+            return (tasks, imageFromDbBoolAr);
+
         }
 
-        private async void CalculateClick(object sender, RoutedEventArgs e)
-        {
-            if (ViewData.CalculationEnable && AllParameteresValid)
-            {
-				ResetToken();
-				ViewData.Distance = 0;
-				ViewData.Similarity = 0;
 
-				pbStatus.Value = 0;
+		private async void CalculateClick(object sender, RoutedEventArgs e)
+		{
+			if (!ViewData.CalculationEnable || !AllParameteresValid)
+				return;
+			
+			ResetToken();
+			ViewData.Distance = 0;
+			ViewData.Similarity = 0;
 
-                ViewData.CalculationEnable = false;
-                ViewData.Cancellable = true;
+			pbStatus.Value = 0;
 
-                bool sameImages = ViewData.ImagePath1 == ViewData.ImagePath2;
+			ViewData.CalculationEnable = false;
+			ViewData.Cancellable = true;
 
-                //загружаем выбранные картинки
-                var imagesBytes = new List<byte[]>{
-                    File.ReadAllBytes(ViewData.ImagePath1),
-                };
-                if (!sameImages) imagesBytes.Add(File.ReadAllBytes(ViewData.ImagePath2));
+			bool sameImages = ViewData.ImagePath1 == ViewData.ImagePath2;
 
-                var imgEmbeddings = new float[imagesBytes.Count][];
-				var tasks = new List<Task<Task<(float[], int)>>>();
+			//загружаем выбранные картинки
+			var imagesBytes = new List<byte[]>{
+				File.ReadAllBytes(ViewData.ImagePath1),
+			};
+			if (!sameImages) imagesBytes.Add(File.ReadAllBytes(ViewData.ImagePath2));
 
-                //получаем данные из базы + запускаем таски если не нашли данные
-				LaunchTasks(ref imgEmbeddings, ref tasks, imagesBytes);
-                
-				while (tasks.Count > 0)
+
+			var imgEmbeddings = new float[imagesBytes.Count][];
+
+            //получаем данные из базы + запускаем таски если не нашли данные
+            var tasksAndBoolAr = LaunchTasks(imagesBytes);
+			var tasks = tasksAndBoolAr.Item1.ToList();
+            var indexingArray = new List<Task<float[]>>(tasks);
+            var imageWasInDbBoolAr = tasksAndBoolAr.Item2;
+            
+
+            while (tasks.Any())
+			{
+				//если вернулся - либо закончил - либо отменился
+				var finishedTask = await Task.WhenAny(tasks);
+				var imageIdx = indexingArray.IndexOf(finishedTask);
+                var calcResult = await finishedTask;
+
+				if (token.IsCancellationRequested)
 				{
-					//если вернулся - либо закончил - либо отменился
-                    var finished = await Task.WhenAny(tasks);
-					var calcResult = await await finished;
-					var imageIdx = calcResult.Item2;
+					tasks.Clear();
+					pbStatus.Value = 0;
+					ViewData.Distance = -1;
+					ViewData.Similarity = -1;
+					MessageBox.Show("All calculations canceled");
+					return;
+				}
+				else 
+				{
+					imgEmbeddings[imageIdx] = calcResult;
 
-                    if (token.IsCancellationRequested)
+					if (!imageWasInDbBoolAr[imageIdx])
 					{
-						tasks.Clear();
-                        pbStatus.Value = 0;
-                        ViewData.Distance = -1;
-						ViewData.Similarity = -1;
-						MessageBox.Show("All calculations canceled");
-						break;
-					}
-					else 
-					{
-						imgEmbeddings[imageIdx] = calcResult.Item1;
-
                         //записываем результат в базу
-                        using (var db = new ImagesContext())           
+                        using (var db = new ImagesContext())
                         {
-                            var byteArray = new byte[calcResult.Item1.Length * 4];
-                            Buffer.BlockCopy(imgEmbeddings[imageIdx], 0, byteArray, 0, byteArray.Length);
+                            var byteArray = new byte[calcResult.Length * 4];
+                            Buffer.BlockCopy(calcResult, 0, byteArray, 0, byteArray.Length);
 
                             var newImageDetails = new ImageDetails { Data = imagesBytes[imageIdx] };
-							ImageInfo newImage = new ImageInfo
-							{
-								Name = (imageIdx == 0) ? Path.GetFileName(ViewData.ImagePath1) : Path.GetFileName(ViewData.ImagePath2),
+                            ImageInfo newImage = new ImageInfo
+                            {
+                                Name = (imageIdx == 0) ? Path.GetFileName(ViewData.ImagePath1) : Path.GetFileName(ViewData.ImagePath2),
                                 Embedding = byteArray,
                                 Details = newImageDetails,
                                 Hash = ImageDetails.GetHash(newImageDetails.Data),
@@ -246,54 +249,55 @@ namespace WpfApp
                             db.Add(newImage);
                             db.SaveChanges();
                         }
-                        pbStatus.Value += 49;
-					}
-                    tasks.Remove(finished);
-                }
+                    }
+					pbStatus.Value += 49;
+				}
+				tasks.Remove(finishedTask);
+			}
 
-                //посчитать метрики
-                await Task.Factory.StartNew(() =>
-				{
-                    ViewData.Distance = ArcFaceModel.Distance(imgEmbeddings[0], sameImages ? imgEmbeddings[0] : imgEmbeddings[1]);
-                    ViewData.Similarity = ArcFaceModel.Similarity(imgEmbeddings[0], sameImages ? imgEmbeddings[0] : imgEmbeddings[1]);
-				});
+			//посчитать метрики
+			await Task.Factory.StartNew(() =>
+			{
+				ViewData.Distance = ArcFaceModel.Distance(imgEmbeddings[0], sameImages ? imgEmbeddings[0] : imgEmbeddings[1]);
+				ViewData.Similarity = ArcFaceModel.Similarity(imgEmbeddings[0], sameImages ? imgEmbeddings[0] : imgEmbeddings[1]);
+			});
 
-                pbStatus.Value = 100;
-                ViewData.Cancellable = false; 
-            }
-        }
+			pbStatus.Value = 100;
+			ViewData.Cancellable = false; 
+			
+		}
 
-        private void CancelCalculationsClick(object sender, RoutedEventArgs e)
-        {
+		private void CancelCalculationsClick(object sender, RoutedEventArgs e)
+		{
 			token_src.Cancel();
-        }
+		}
 
-        private void OpenDatabaseClick(object sender, RoutedEventArgs e)
-        {
-            DatabaseWindow windowDatabase = new DatabaseWindow();
-            windowDatabase.Show();
-        }
-    }
+		private void OpenDatabaseClick(object sender, RoutedEventArgs e)
+		{
+			DatabaseWindow windowDatabase = new DatabaseWindow();
+			windowDatabase.Show();
+		}
+	}
 
-    public class NumConverter : IValueConverter
-    {
-        public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
-        {
-            try
-            {
-                var v = (float)value;
-                return v == -1 ? "Canceled" : v.ToString();
-            }
-            catch
-            {
+	public class NumConverter : IValueConverter
+	{
+		public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+		{
+			try
+			{
+				var v = (float)value;
+				return v == -1 ? "Canceled" : v.ToString();
+			}
+			catch
+			{
 				return "ConvertationError";
 			}
-        }
-        public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
-        {
+		}
+		public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+		{
 			throw new NotImplementedException();
 		}
-    }
+	}
 }
 	
 
