@@ -6,6 +6,8 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp;
 
 namespace ArcFaceComponent;
 
@@ -39,7 +41,7 @@ public class Component : IDisposable
 
     public float Similarity(float[] v1, float[] v2) => v1.Zip(v2).Select(p => p.First * p.Second).Sum();
 
-    public static DenseTensor<float> GetTensorFromImage(string img_path) => ImageTransformer.ImageToTensor(img_path);
+    public static DenseTensor<float> GetTensorFromImage(Image<Rgb24> img) => ImageTransformer.ImageToTensor(img);
 
     //utils
     float Length(float[] v) => (float)Math.Sqrt(v.Select(x => x * x).Sum());
