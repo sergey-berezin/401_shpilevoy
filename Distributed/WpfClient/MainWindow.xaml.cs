@@ -157,7 +157,9 @@ namespace WpfClient
 
             if (imageIDs == null)
             {
-                MessageBox.Show("Calculations are cancaled");
+                MessageBox.Show("Cant post images, probably server doesn't response or calculations were canceled");
+                ViewData.CalculationEnable = true;
+                ViewData.Cancellable = false;
                 return;
             }
             pbStatus.Value = 49;
@@ -165,10 +167,10 @@ namespace WpfClient
             var distAndSim = await service.GetCompare(imageIDs[0], sameImages ? imageIDs[0] : imageIDs[1]);
             if (distAndSim == null)
             {
-                {
-                    MessageBox.Show("cant get dist and sim from server");
-                    return;
-                }
+                MessageBox.Show("Cant compare images, probably server doesn't response or calculations were canceled");
+                ViewData.CalculationEnable = true;
+                ViewData.Cancellable = false;
+                return;
             }
             ViewData.Distance = distAndSim.Distance;
             ViewData.Similarity = distAndSim.Similarity;
@@ -180,6 +182,8 @@ namespace WpfClient
         private void CancelCalculationsClick(object sender, RoutedEventArgs e)
         {
             token_src.Cancel();
+            ViewData.CalculationEnable = true;
+            ViewData.Cancellable = false;
         }
 
         private async void OpenDatabaseClick(object sender, RoutedEventArgs e)

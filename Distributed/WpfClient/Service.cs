@@ -23,7 +23,7 @@ namespace WpfClient
         public Service()
         {
             retryPolicy = Policy.Handle<HttpRequestException>().WaitAndRetryAsync(
-                5, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))  
+                3, retryAttempt => TimeSpan.FromSeconds(1)  
                       + TimeSpan.FromMilliseconds(jitterer.Next(0, 1000)));
         }
 

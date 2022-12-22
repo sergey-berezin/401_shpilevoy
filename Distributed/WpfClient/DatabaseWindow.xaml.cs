@@ -34,6 +34,7 @@ namespace WpfClient
         {
             
             var imgs = await service.GetAllImages();
+            if (imgs == null) return;
             foreach (var imageInfo in imgs)
                 ImagesCollection.Add(imageInfo);
             
@@ -49,7 +50,7 @@ namespace WpfClient
                 var res = await service.DeleteImage(imageInfo.Id);
                 if (res == null)
                 {
-                    MessageBox.Show("Error");
+                    MessageBox.Show("Error, Server doesnt response");
                     return;
                 }
 
@@ -77,7 +78,7 @@ namespace WpfClient
                 var res = await service.DeleteAllImages();
                 if (res == null)
                 {
-                    MessageBox.Show("Error");
+                    MessageBox.Show("Error, Server doesnt response");
                     return;
                 }
 
