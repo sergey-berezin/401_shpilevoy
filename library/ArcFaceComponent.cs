@@ -37,14 +37,14 @@ public class Component : IDisposable
             throw new Exception("session is null");
     }
 
-    public float Distance(float[] v1, float[] v2) => Length(v1.Zip(v2).Select(p => p.First - p.Second).ToArray());
+    public static float Distance(float[] v1, float[] v2) => Length(v1.Zip(v2).Select(p => p.First - p.Second).ToArray());
 
-    public float Similarity(float[] v1, float[] v2) => v1.Zip(v2).Select(p => p.First * p.Second).Sum();
+    public static float Similarity(float[] v1, float[] v2) => v1.Zip(v2).Select(p => p.First * p.Second).Sum();
 
     public static DenseTensor<float> GetTensorFromImage(Image<Rgb24> img) => ImageTransformer.ImageToTensor(img);
 
     //utils
-    float Length(float[] v) => (float)Math.Sqrt(v.Select(x => x * x).Sum());
+    static float Length(float[] v) => (float)Math.Sqrt(v.Select(x => x * x).Sum());
 
     float[] Normalize(float[] v)
     {
